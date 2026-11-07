@@ -1,0 +1,1 @@
+{"name":"whiteboard-backend","private":true,"version":"0.1.0","type":"module","scripts":{"dev":"wrangler dev --local","check":"tsc --noEmit","db:migrate:local":"wrangler d1 migrations apply DB --local"},"dependencies":{"@clerk/backend":"^2.0.0"},"devDependencies":{"@cloudflare/workers-types":"^5.20261107.1","typescript":"^5.9.3","wrangler":"^4.0.0"}}
