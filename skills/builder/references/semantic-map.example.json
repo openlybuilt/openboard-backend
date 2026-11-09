@@ -1,0 +1,22 @@
+{
+  "goal": "Show how a signed-in OpenBoard edit reaches account storage",
+  "audience": "engineers",
+  "diagramType": "architecture",
+  "source": { "kind": "repository", "path": "." },
+  "entities": [
+    { "id": "browser", "label": "Browser", "role": "boundary", "kind": "runtime", "evidence": ["platform/src/App.tsx: App"] },
+    { "id": "editor", "label": "Canvas editor", "role": "node", "kind": "UI", "parentId": "browser", "evidence": ["platform/src/CanvasEditor.tsx: CanvasEditor"] },
+    { "id": "app", "label": "Board state", "role": "node", "kind": "client state", "parentId": "browser", "evidence": ["platform/src/App.tsx: commit"] },
+    { "id": "sync", "label": "Cloud sync queue", "role": "node", "kind": "client", "parentId": "browser", "evidence": ["platform/src/cloud-boards.ts: CloudBoards"] },
+    { "id": "worker", "label": "Board Worker", "role": "boundary", "kind": "service", "evidence": ["openboard-backend/wrangler.jsonc: main"] },
+    { "id": "api", "label": "Board API", "role": "node", "kind": "HTTP API", "parentId": "worker", "evidence": ["openboard-backend/src/index.ts: fetch"] },
+    { "id": "d1", "label": "D1 board storage", "role": "boundary", "kind": "database", "evidence": ["openboard-backend/wrangler.jsonc: DB"] }
+  ],
+  "connections": [
+    { "from": "editor", "to": "app", "kind": "callback", "label": "update board", "evidence": ["platform/src/CanvasEditor.tsx: update", "platform/src/App.tsx: commit"] },
+    { "from": "app", "to": "sync", "kind": "queue", "label": "enqueue change", "evidence": ["platform/src/App.tsx: commit"] },
+    { "from": "sync", "to": "api", "kind": "HTTP", "label": "authenticated PUT /boards/:id", "evidence": ["platform/src/cloud-boards.ts: flush", "openboard-backend/src/index.ts: fetch"] },
+    { "from": "api", "to": "d1", "kind": "write", "label": "store by owner_id", "evidence": ["openboard-backend/src/index.ts: INSERT INTO boards"] }
+  ],
+  "unknowns": []
+}

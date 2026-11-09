@@ -1,4 +1,4 @@
-# Whiteboard backend
+# OpenBoard backend
 
 An authenticated Cloudflare Worker API for OpenBoard, with D1 storage. Each board is scoped to the Clerk user who owns it.
 
