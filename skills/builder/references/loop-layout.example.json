@@ -1,0 +1,95 @@
+{
+  "title": "",
+  "canvas": {
+    "width": 1300,
+    "height": 1030,
+    "background": "plain",
+    "color": "#ffffff"
+  },
+  "elements": [
+    {
+      "id": "observe",
+      "type": "rectangle",
+      "x": 500,
+      "y": 110,
+      "width": 300,
+      "height": 100,
+      "label": "Capture screenshot",
+      "fill": "#eef7ff"
+    },
+    {
+      "id": "model",
+      "type": "rectangle",
+      "x": 80,
+      "y": 420,
+      "width": 320,
+      "height": 110,
+      "label": "Send task to model",
+      "fill": "#ffffff"
+    },
+    {
+      "id": "repeat",
+      "type": "rectangle",
+      "x": 490,
+      "y": 430,
+      "width": 320,
+      "height": 100,
+      "label": "Repeat until finished",
+      "fill": "#f0f4fa"
+    },
+    {
+      "id": "execute",
+      "type": "rectangle",
+      "x": 900,
+      "y": 420,
+      "width": 320,
+      "height": 110,
+      "label": "Execute action on VM",
+      "fill": "#ffffff"
+    },
+    {
+      "id": "receive",
+      "type": "rectangle",
+      "x": 500,
+      "y": 820,
+      "width": 300,
+      "height": 100,
+      "label": "Receive one action",
+      "fill": "#ffffff"
+    }
+  ],
+  "connections": [
+    {
+      "id": "observe-to-model",
+      "from": "observe",
+      "to": "model",
+      "fromSide": "left",
+      "toSide": "top",
+      "via": [[240, 160]]
+    },
+    {
+      "id": "model-to-receive",
+      "from": "model",
+      "to": "receive",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [[240, 870]]
+    },
+    {
+      "id": "receive-to-execute",
+      "from": "receive",
+      "to": "execute",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "via": [[1060, 870]]
+    },
+    {
+      "id": "execute-to-observe",
+      "from": "execute",
+      "to": "observe",
+      "fromSide": "top",
+      "toSide": "right",
+      "via": [[1060, 160]]
+    }
+  ]
+}
