@@ -8,9 +8,17 @@ interface Env {
 }
 
 const MAX_BODY_BYTES=2_000_000;
+const TRASH_RETENTION_MS=30*24*60*60*1000;
 const ID=/^[a-zA-Z0-9_-]{1,100}$/;
 
+async function purgeExpiredBoards(env:Env,now=Date.now()) {
+ await env.DB.prepare('DELETE FROM boards WHERE deleted_at IS NOT NULL AND deleted_at <= ?').bind(now-TRASH_RETENTION_MS).run();
+}
+
 export default {
+ async scheduled(_controller:ScheduledController,env:Env):Promise<void> {
+  await purgeExpiredBoards(env);
+ },
  async fetch(request:Request,env:Env):Promise<Response> {
   const origin=request.headers.get('Origin');
   const cors=new Headers({'Vary':'Origin','Access-Control-Allow-Methods':'GET, PUT, DELETE, OPTIONS','Access-Control-Allow-Headers':'Authorization, Content-Type'});
@@ -28,7 +36,7 @@ export default {
    const userId=auth.toAuth().userId;
    if(!userId)return reply({error:'Sign in required'},401);
    if(path==='/boards'&&request.method==='GET'){
-    const result=await env.DB.prepare('SELECT body FROM boards WHERE owner_id = ? ORDER BY updated_at DESC').bind(userId).all<{body:string}>();
+    const result=await env.DB.prepare('SELECT body FROM boards WHERE owner_id = ? AND (deleted_at IS NULL OR deleted_at > ?) ORDER BY updated_at DESC').bind(userId,Date.now()-TRASH_RETENTION_MS).all<{body:string}>();
     return reply({boards:result.results.map(row=>JSON.parse(row.body))});
    }
    const match=path.match(/^\/boards\/([a-zA-Z0-9_-]{1,100})$/);
@@ -44,7 +52,9 @@ export default {
     let board:Record<string,unknown>;
     try{board=JSON.parse(body)}catch{return reply({error:'Invalid JSON'},400)}
     if(!board||Array.isArray(board)||typeof board!=='object'||board.id!==id||!ID.test(id)||typeof board.name!=='string'||board.name.length>100||typeof board.updatedAt!=='number'||!Number.isFinite(board.updatedAt)||!Array.isArray(board.nodes)||!Array.isArray(board.edges))return reply({error:'Invalid board'},400);
-    await env.DB.prepare('INSERT INTO boards(owner_id,id,body,updated_at) VALUES(?,?,?,?) ON CONFLICT(owner_id,id) DO UPDATE SET body=excluded.body,updated_at=excluded.updated_at').bind(userId,id,body,board.updatedAt).run();
+    const deletedAt=board.deletedAt;
+    if(deletedAt!==undefined&&(typeof deletedAt!=='number'||!Number.isFinite(deletedAt)||deletedAt>Date.now()+60_000||deletedAt<=Date.now()-TRASH_RETENTION_MS))return reply({error:'Invalid deletion date'},400);
+    await env.DB.prepare('INSERT INTO boards(owner_id,id,body,updated_at,deleted_at) VALUES(?,?,?,?,?) ON CONFLICT(owner_id,id) DO UPDATE SET body=excluded.body,updated_at=excluded.updated_at,deleted_at=excluded.deleted_at').bind(userId,id,body,board.updatedAt,deletedAt??null).run();
     return reply({ok:true});
    }
    return reply({error:'Method not allowed'},405);

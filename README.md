@@ -11,4 +11,6 @@ pnpm exec wrangler d1 migrations apply DB --remote --config wrangler.production.
 pnpm exec wrangler deploy --config wrangler.production.jsonc
 ```
 
+Deleted boards remain recoverable for 30 days. The Worker hides expired boards on reads and its daily Cron Trigger permanently removes them. Apply the D1 migrations before deploying the Worker so the `deleted_at` column exists.
+
 The production configuration requires `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` as Worker secrets. Never commit them or expose the secret key to the frontend. Verify `/health`, authentication, and board isolation after deployment.
