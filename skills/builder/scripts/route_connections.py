@@ -3,8 +3,7 @@
 from heapq import heappop, heappush
 
 CLEARANCE = 12
-BEND_COST = 22
-CROSSING_COST = 75
+ARROW_GAP = 6
 
 
 def rectangle(element, margin=0):
@@ -93,24 +92,29 @@ def simplify(points):
     return result
 
 
-def crossing_penalty(start, end, previous):
-    penalty = 0
-    for route in previous:
-        for a, b in zip(route, route[1:]):
-            if start[0] == end[0] and a[1] == b[1]:
-                if min(start[1], end[1]) < a[1] < max(start[1], end[1]) and min(a[0], b[0]) < start[0] < max(a[0], b[0]):
-                    penalty += CROSSING_COST
-            elif start[1] == end[1] and a[0] == b[0]:
-                if min(start[0], end[0]) < a[0] < max(start[0], end[0]) and min(a[1], b[1]) < start[1] < max(a[1], b[1]):
-                    penalty += CROSSING_COST
-            elif start[0] == end[0] == a[0] == b[0] and max(min(start[1], end[1]), min(a[1], b[1])) < min(max(start[1], end[1]), max(a[1], b[1])):
-                penalty += CROSSING_COST / 3
-            elif start[1] == end[1] == a[1] == b[1] and max(min(start[0], end[0]), min(a[0], b[0])) < min(max(start[0], end[0]), max(a[0], b[0])):
-                penalty += CROSSING_COST / 3
-    return penalty
+def segments_touch(start, end, other_start, other_end, gap=ARROW_GAP):
+    """Include endpoints and near misses so unrelated arrows have a visible gap."""
+    left, right = sorted((start[0], end[0]))
+    top, bottom = sorted((start[1], end[1]))
+    other_left, other_right = sorted((other_start[0], other_end[0]))
+    other_top, other_bottom = sorted((other_start[1], other_end[1]))
+    return (left - gap <= other_right and other_left <= right + gap
+            and top - gap <= other_bottom and other_top <= bottom + gap)
 
 
-def grid_route(start, end, blocked, previous, width, height):
+def route_contacts(path, routes, gap=ARROW_GAP):
+    return sum(segments_touch(a, b, c, d, gap)
+               for a, b in zip(path, path[1:])
+               for route in routes
+               for c, d in zip(route, route[1:]))
+
+
+def route_length(path):
+    return sum(abs(a[0] - b[0]) + abs(a[1] - b[1])
+               for a, b in zip(path, path[1:]))
+
+
+def grid_route(start, end, blocked, hard_routes, soft_routes, width, height):
     if any(contains(rect, start) or contains(rect, end) for _, rect in blocked):
         return None
     xs = {start[0], end[0], 8, width - 8}
@@ -118,92 +122,127 @@ def grid_route(start, end, blocked, previous, width, height):
     for _, (left, top, right, bottom) in blocked:
         xs.update((left - 2, right + 2))
         ys.update((top - 2, bottom + 2))
+    for route in (*hard_routes, *soft_routes):
+        for x, y in route:
+            xs.update((x - ARROW_GAP - 2, x + ARROW_GAP + 2))
+            ys.update((y - ARROW_GAP - 2, y + ARROW_GAP + 2))
     xs = sorted(x for x in xs if 0 <= x <= width)
     ys = sorted(y for y in ys if 0 <= y <= height)
     xi, yi = {v: i for i, v in enumerate(xs)}, {v: i for i, v in enumerate(ys)}
     origin, target = (xi[start[0]], yi[start[1]]), (xi[end[0]], yi[end[1]])
-    heap = [(0, 0, origin[0], origin[1], "")]
-    best = {(origin[0], origin[1], ""): 0}
+    heuristic = abs(start[0] - end[0]) + abs(start[1] - end[1])
+    heap = [(heuristic, 0, 0, 0, origin[0], origin[1], "")]
+    best = {(origin[0], origin[1], ""): (0, 0, 0)}
     parent = {}
     while heap:
-        _, cost, i, j, direction = heappop(heap)
+        _, bends, soft_contacts, distance, i, j, direction = heappop(heap)
         state = (i, j, direction)
-        if cost != best.get(state):
+        if (distance, bends, soft_contacts) != best.get(state):
             continue
         if (i, j) == target:
             path = [(xs[i], ys[j])]
             while state in parent:
                 state = parent[state]
                 path.append((xs[state[0]], ys[state[1]]))
-            return simplify(reversed(path)), cost
+            return simplify(reversed(path)), (distance, bends, soft_contacts)
         for ni, nj, move in ((i - 1, j, "h"), (i + 1, j, "h"), (i, j - 1, "v"), (i, j + 1, "v")):
             if ni < 0 or nj < 0 or ni >= len(xs) or nj >= len(ys):
                 continue
             a, b = (xs[i], ys[j]), (xs[ni], ys[nj])
             if any(hits(rect, a, b) for _, rect in blocked):
                 continue
+            if route_contacts((a, b), hard_routes):
+                continue
             step = abs(a[0] - b[0]) + abs(a[1] - b[1])
-            next_cost = cost + step + (BEND_COST if direction and direction != move else 0)
-            next_cost += crossing_penalty(a, b, previous)
+            next_distance = distance + step
+            next_bends = bends + int(bool(direction and direction != move))
+            next_contacts = soft_contacts + route_contacts((a, b), soft_routes)
+            next_cost = (next_distance, next_bends, next_contacts)
             next_state = (ni, nj, move)
-            if next_cost >= best.get(next_state, float("inf")):
+            if next_cost >= best.get(next_state, (float("inf"),) * 3):
                 continue
             best[next_state] = next_cost
             parent[next_state] = state
             estimate = abs(b[0] - end[0]) + abs(b[1] - end[1])
-            heappush(heap, (next_cost + estimate, next_cost, ni, nj, move))
+            heappush(heap, (next_distance + estimate, next_bends, next_contacts,
+                            next_distance, ni, nj, move))
     return None
 
 
-def route_connection(source, target, elements, width, height, axis="auto", via=(), previous=()):
+def route_connection(source, target, elements, width, height, axis="auto", via=(),
+                     previous=(), sides=None):
     blocked = obstacles(elements)
     skip = {source["id"], target["id"]}
+    hard_routes = [item["points"] for item in previous
+                   if not skip.intersection((item["source"], item["target"]))]
+    soft_routes = [item["points"] for item in previous
+                   if skip.intersection((item["source"], item["target"]))]
     if via:
         sx = source["x"] + source["width"] / 2
         sy = source["y"] + source["height"] / 2
         tx = target["x"] + target["width"] / 2
         ty = target["y"] + target["height"] / 2
         horizontal = axis == "horizontal" or (axis == "auto" and abs(tx - sx) >= abs(ty - sy))
-        if horizontal:
-            sides = ("right", "left") if tx >= sx else ("left", "right")
+        if sides:
+            start, _ = port(source, sides[0])
+            end, _ = port(target, sides[1])
+        elif horizontal:
+            manual_sides = ("right", "left") if tx >= sx else ("left", "right")
+            start, _ = port(source, manual_sides[0])
+            end, _ = port(target, manual_sides[1])
         else:
-            sides = ("bottom", "top") if ty >= sy else ("top", "bottom")
-        start, _ = port(source, sides[0])
-        end, _ = port(target, sides[1])
+            manual_sides = ("bottom", "top") if ty >= sy else ("top", "bottom")
+            start, _ = port(source, manual_sides[0])
+            end, _ = port(target, manual_sides[1])
         manual = orthogonalize([start, *via, end], "horizontal" if horizontal else "vertical")
-        if not collisions(manual, blocked, skip) and not crosses_endpoint_interior(manual, source, target):
+        if (not collisions(manual, blocked, skip)
+                and not crosses_endpoint_interior(manual, source, target)
+                and not route_contacts(manual, hard_routes)):
             return manual, []
     sx = source["x"] + source["width"] / 2
     sy = source["y"] + source["height"] / 2
     tx = target["x"] + target["width"] / 2
     ty = target["y"] + target["height"] / 2
-    choices = (("right", "left"), ("left", "right")) if axis == "horizontal" else (("bottom", "top"), ("top", "bottom")) if axis == "vertical" else (("right", "left"), ("bottom", "top"), ("left", "right"), ("top", "bottom"))
+    if sides:
+        choices = (sides,)
+    elif axis == "horizontal":
+        choices = (("right", "left"), ("left", "right"))
+    elif axis == "vertical":
+        choices = (("bottom", "top"), ("top", "bottom"))
+    else:
+        choices = (("right", "left"), ("bottom", "top"),
+                   ("left", "right"), ("top", "bottom"))
     candidates = []
     for from_side, to_side in choices:
         start, escape_start = port(source, from_side)
         end, escape_end = port(target, to_side)
         if not all(0 <= x <= width and 0 <= y <= height for x, y in (escape_start, escape_end)):
             continue
-        route = grid_route(escape_start, escape_end, blocked, previous, width, height)
+        route = grid_route(escape_start, escape_end, blocked, hard_routes,
+                           soft_routes, width, height)
         if route is None:
             continue
-        middle, cost = route
+        middle, _ = route
         full = simplify([start, escape_start, *middle, escape_end, end])
-        if collisions(full, blocked, skip) or crosses_endpoint_interior(full, source, target):
+        if (collisions(full, blocked, skip)
+                or crosses_endpoint_interior(full, source, target)
+                or route_contacts(full, hard_routes)):
             continue
         opposite = (from_side, to_side) in (("right", "left"), ("bottom", "top"))
         backward = (tx < sx and from_side == "right") or (tx > sx and from_side == "left") or (ty < sy and from_side == "bottom") or (ty > sy and from_side == "top")
-        candidates.append((cost + (20 if backward else 0) + (0 if opposite else 10), full))
+        score = (route_length(full), max(0, len(full) - 2),
+                 route_contacts(full, soft_routes), int(backward), int(not opposite))
+        candidates.append((score, full))
     if not candidates:
         raise ValueError(f"no clear arrow route from {source['id']} to {target['id']}; widen the gaps or canvas")
     candidates.sort(key=lambda item: item[0])
-    return candidates[0][1], (["manual waypoints crossed content; automatic route used"] if via else [])
+    return candidates[0][1], (["manual waypoints crossed content or another arrow; automatic route used"] if via else [])
 
 
-def label_position(label, path, elements, previous, width, height, preferred=None):
+def label_position(label, path, elements, previous, width, height, preferred=None, font_size=20):
     """Place a connection label beside a clear segment, never over content or a line."""
-    label_width = max(80, len(label) * 8.5)
-    label_height = 22
+    label_width = max(100, len(label) * font_size * 0.56)
+    label_height = font_size * 1.5
     blocked = obstacles(elements)
 
     def clear(x, y):
@@ -244,6 +283,7 @@ def validate_arrow_clearance(elements):
     """Check the exported geometry, including labels added after earlier arrows."""
     by_id = {element["id"]: element for element in elements}
     blocked = obstacles(elements)
+    prior_arrows = []
     for element in elements:
         if element["type"] != "arrow":
             continue
@@ -257,3 +297,8 @@ def validate_arrow_clearance(elements):
         if crossed or enters_card:
             detail = ", ".join(crossed) if crossed else "an endpoint card"
             raise ValueError(f"arrow {element['id']} crosses {detail}; move the elements or add space")
+        endpoints = {binding["elementId"] for binding in (source_binding, target_binding) if binding}
+        for prior_id, prior_path, prior_endpoints in prior_arrows:
+            if not endpoints.intersection(prior_endpoints) and route_contacts(path, (prior_path,)):
+                raise ValueError(f"arrow {element['id']} touches arrow {prior_id}; move cards or widen the arrow corridor")
+        prior_arrows.append((element["id"], path, endpoints))

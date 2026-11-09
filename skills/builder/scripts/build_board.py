@@ -187,7 +187,8 @@ def compile_board(spec):
         stroke = color(definition.get("stroke", "#374151"), f"{element_id}.stroke")
         fill = color(definition.get("fill", "#ffffff"), f"{element_id}.fill")
         ink = color(definition.get("textColor", "#17212d"), f"{element_id}.textColor")
-        font_size = number(definition.get("fontSize", 17), f"{element_id}.fontSize", True)
+        font_size = number(definition.get("fontSize", 24 if kind == "frame" else 28),
+                           f"{element_id}.fontSize", True)
         frame_id = definition.get("container")
         if kind in SHAPES:
             w = number(definition.get("width"), f"{element_id}.width", True)
@@ -206,7 +207,7 @@ def compile_board(spec):
             item["strokeWidth"] = number(definition.get("strokeWidth", 2), f"{element_id}.strokeWidth", True)
             item["frameId"] = frame_id
             if kind == "frame":
-                item["name"] = str(definition.get("label", ""))
+                item["name"] = ""
             if kind == "code":
                 item.update({"strokeColor": "transparent", "backgroundColor": "#ffffff01",
                              "link": None, "customData": {"kind": "arc-code-block",
@@ -216,12 +217,28 @@ def compile_board(spec):
             add(item)
             shapes[element_id] = item
             label = definition.get("label", "")
+            if kind == "frame" and label:
+                if not isinstance(label, str):
+                    fail(f"{element_id}.label must be a string")
+                heading_id = element_id + "-heading"
+                if heading_id in ids:
+                    fail(f"generated heading id conflicts with {heading_id}")
+                ids.add(heading_id)
+                heading_width = w - 32
+                heading = wrapped(label, heading_width, font_size)
+                heading_height = font_size * 1.25 * (heading.count("\n") + 1)
+                if heading_height + 20 > h:
+                    fail(f"{element_id}: frame heading does not fit; enlarge the frame or shorten its label")
+                add(text_element(heading_id, heading, x + 16, y + 10, heading_width,
+                                 heading_height, font_size, ink, len(elements), frame_id=element_id))
             if kind not in {"frame", "code"} and label:
                 if not isinstance(label, str):
                     fail(f"{element_id}.label must be a string")
                 text = wrapped(label, w - 24, font_size)
                 lines = text.count("\n") + 1
-                text_h = min(h - 8, font_size * 1.25 * lines)
+                text_h = font_size * 1.25 * lines
+                if text_h > h - 8:
+                    fail(f"{element_id}: label does not fit; enlarge the card or shorten its label")
                 label_id = element_id + "-label"
                 if label_id in ids:
                     fail(f"generated label id conflicts with {label_id}")
@@ -267,14 +284,22 @@ def compile_board(spec):
         axis = connection.get("axis", "auto")
         if axis not in {"auto", "horizontal", "vertical"}:
             fail(f"connection {ordinal}.axis must be auto, horizontal, or vertical")
+        from_side, to_side = connection.get("fromSide"), connection.get("toSide")
+        if (from_side is None) != (to_side is None):
+            fail(f"connection {ordinal}: fromSide and toSide must be given together")
+        if from_side is not None and (from_side not in {"top", "right", "bottom", "left"}
+                                      or to_side not in {"top", "right", "bottom", "left"}):
+            fail(f"connection {ordinal}: sides must be top, right, bottom, or left")
         checked_via = [point(p, f"connection {ordinal}.via") for p in via]
         absolute, warnings = route_connection(shapes[source_id], shapes[target_id], elements,
-                                              width, height, axis, checked_via, previous_routes)
+                                              width, height, axis, checked_via, previous_routes,
+                                              (from_side, to_side) if from_side else None)
         for warning in warnings:
             print(f"connection {ordinal} ({source_id} → {target_id}): {warning}", file=sys.stderr)
         if any(px < 0 or py < 0 or px > width or py > height for px, py in absolute):
             fail(f"connection {ordinal}: route extends beyond the canvas")
-        previous_routes.append(absolute)
+        previous_routes.append({"source": source_id, "target": target_id,
+                                "points": absolute})
         binding = lambda target: {"elementId": target, "focus": 0, "gap": 2}
         arrow = path_element(connection_id, "arrow", absolute, len(elements), ink,
                              connection.get("dashed", False), binding(source_id), binding(target_id))
@@ -285,15 +310,19 @@ def compile_board(spec):
         if label:
             if not isinstance(label, str):
                 fail(f"connection {ordinal}.label must be a string")
+            label_size = number(connection.get("fontSize", 20),
+                                f"connection {ordinal}.fontSize", True)
             preferred_label = point(connection["labelAt"], f"connection {ordinal}.labelAt") if "labelAt" in connection else None
-            label_x, label_y = label_position(label, absolute, elements, previous_routes,
-                                              width, height, preferred_label)
+            label_x, label_y = label_position(label, absolute, elements,
+                                              [route["points"] for route in previous_routes],
+                                              width, height, preferred_label, label_size)
             label_id = connection_id + "-label"
             if label_id in ids:
                 fail(f"generated label id conflicts with {label_id}")
             ids.add(label_id)
             add(text_element(label_id, label, label_x, label_y,
-                             max(80, len(label) * 8.5), 22, 14, ink, len(elements)))
+                             max(100, len(label) * label_size * 0.56),
+                             label_size * 1.5, label_size, ink, len(elements)))
     validate_arrow_clearance(elements)
     return {
         "type": "excalidraw", "version": 2, "source": "builder",
