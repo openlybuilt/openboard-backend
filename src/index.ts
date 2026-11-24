@@ -35,6 +35,30 @@ export default {
    if(!auth.isSignedIn)return reply({error:'Sign in required'},401);
    const userId=auth.toAuth().userId;
    if(!userId)return reply({error:'Sign in required'},401);
+   if(path==='/folders'&&request.method==='GET'){
+    const result=await env.DB.prepare('SELECT id, name FROM folders WHERE owner_id = ? ORDER BY name COLLATE NOCASE, id').bind(userId).all<{id:string;name:string}>();
+    return reply({folders:result.results});
+   }
+   const folderMatch=path.match(/^\/folders\/([a-zA-Z0-9_-]{1,100})$/);
+   if(folderMatch){
+    const id=folderMatch[1];
+    if(request.method==='DELETE'){
+     await env.DB.prepare('DELETE FROM folders WHERE owner_id = ? AND id = ?').bind(userId,id).run();
+     return new Response(null,{status:204,headers:cors});
+    }
+    if(request.method==='PUT'){
+     const body=await request.text();
+     if(new TextEncoder().encode(body).byteLength>1024)return reply({error:'Folder is too large'},413);
+     let folder:unknown;
+     try{folder=JSON.parse(body)}catch{return reply({error:'Invalid JSON'},400)}
+     if(!folder||typeof folder!=='object'||Array.isArray(folder))return reply({error:'Invalid folder'},400);
+     const value=folder as Record<string,unknown>;
+     if(value.id!==id||typeof value.name!=='string'||!value.name.trim()||value.name.length>100)return reply({error:'Invalid folder'},400);
+     await env.DB.prepare('INSERT INTO folders(owner_id,id,name) VALUES(?,?,?) ON CONFLICT(owner_id,id) DO UPDATE SET name=excluded.name').bind(userId,id,value.name.trim()).run();
+     return reply({ok:true});
+    }
+    return reply({error:'Method not allowed'},405);
+   }
    if(path==='/boards'&&request.method==='GET'){
     const result=await env.DB.prepare('SELECT body FROM boards WHERE owner_id = ? AND (deleted_at IS NULL OR deleted_at > ?) ORDER BY updated_at DESC').bind(userId,Date.now()-TRASH_RETENTION_MS).all<{body:string}>();
     return reply({boards:result.results.map(row=>JSON.parse(row.body))});
