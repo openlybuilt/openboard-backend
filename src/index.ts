@@ -36,7 +36,7 @@ export default {
    const userId=auth.toAuth().userId;
    if(!userId)return reply({error:'Sign in required'},401);
    if(path==='/folders'&&request.method==='GET'){
-    const result=await env.DB.prepare('SELECT id, name FROM folders WHERE owner_id = ? ORDER BY name COLLATE NOCASE, id').bind(userId).all<{id:string;name:string}>();
+    const result=await env.DB.prepare('SELECT id, name, parent_id AS parentId FROM folders WHERE owner_id = ? ORDER BY name COLLATE NOCASE, id').bind(userId).all<{id:string;name:string;parentId:string|null}>();
     return reply({folders:result.results});
    }
    const folderMatch=path.match(/^\/folders\/([a-zA-Z0-9_-]{1,100})$/);
@@ -54,7 +54,15 @@ export default {
      if(!folder||typeof folder!=='object'||Array.isArray(folder))return reply({error:'Invalid folder'},400);
      const value=folder as Record<string,unknown>;
      if(value.id!==id||typeof value.name!=='string'||!value.name.trim()||value.name.length>100)return reply({error:'Invalid folder'},400);
-     await env.DB.prepare('INSERT INTO folders(owner_id,id,name) VALUES(?,?,?) ON CONFLICT(owner_id,id) DO UPDATE SET name=excluded.name').bind(userId,id,value.name.trim()).run();
+     const parentId=value.parentId;
+    if(parentId!==undefined&&parentId!==null&&(typeof parentId!=='string'||!ID.test(parentId)||parentId===id))return reply({error:'Invalid parent folder'},400);
+    if(typeof parentId==='string'){
+     const parent=await env.DB.prepare('SELECT id FROM folders WHERE owner_id = ? AND id = ?').bind(userId,parentId).first();
+     if(!parent)return reply({error:'Parent folder not found'},400);
+     const cycle=await env.DB.prepare('WITH RECURSIVE ancestors(id,parent_id) AS (SELECT id,parent_id FROM folders WHERE owner_id = ? AND id = ? UNION SELECT f.id,f.parent_id FROM folders f JOIN ancestors a ON f.id=a.parent_id WHERE f.owner_id = ?) SELECT id FROM ancestors WHERE id = ?').bind(userId,parentId,userId,id).first();
+     if(cycle)return reply({error:'Folder cannot contain itself'},400);
+    }
+    await env.DB.prepare('INSERT INTO folders(owner_id,id,name,parent_id) VALUES(?,?,?,?) ON CONFLICT(owner_id,id) DO UPDATE SET name=excluded.name,parent_id=CASE WHEN ? THEN excluded.parent_id ELSE folders.parent_id END').bind(userId,id,value.name.trim(),parentId??null,parentId!==undefined?1:0).run();
      return reply({ok:true});
     }
     return reply({error:'Method not allowed'},405);
